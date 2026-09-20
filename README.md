@@ -29,6 +29,41 @@ JUICE_SHOP_DIR=/tmp/juice-shop npm test
 | `bin/splice.mjs <checkout> <key> <variant>` | splices one codefix variant back into its block |
 | `bin/build-base.mjs <checkout> <outdir> [manifest]` | composes all 35 correct variants into the repaired base tree |
 | `bin/parse-check.mjs <tree>` | gates a tree on semgrep 1.99.0 parsing every scored file |
+| `bin/generate-branches.mjs <checkout> <outrepo> [manifest]` | writes the 179 pull-request branches into a bare git repository |
+
+## The branch repository
+
+`bin/generate-branches.mjs` turns the two branch plans into refs. It commits the repaired,
+stripped base tree as `hd85/base`, then cuts 144 splice-derived branches — 22 introduce-the-vuln,
+87 broken-fix, 35 correct-fix — and 35 controls, 179 in all, each from the commit its plan names.
+The fix classes are cut from the **introduce-the-vuln head for the same block**, because a fix
+branch cut from the base would be a diff against code that was never vulnerable. Nothing pushes:
+it writes a local bare repository and stops.
+
+It writes no working tree at any point. Everything is plumbing over an explicit index —
+`hash-object`, `update-index`, `write-tree`, `commit-tree` — because a working tree is where the
+nondeterminism lives: `core.autocrlf` rewrites line endings on the way in, `.gitattributes`
+filters run on `git add` (the corpus ships one), and hooks run on `git commit`.
+
+**Two runs must produce the same SHAs, and that is asserted rather than intended.** A commit hashes
+an author name, an author email, a committer name, a committer email and two timestamps, so all six
+are pinned, the repository's own config is written rather than inherited, and every `git`
+invocation runs with the machine's config pointed at `/dev/null`. `test/branch-repo.test.mjs`
+generates the whole thing twice, into two repositories, and requires every ref and the entire
+manifest to be byte-identical; a third fixture run does it with a hostile identity in the
+environment. The base branch is at `1bde277564d76eb455721866688474d80a54d509`, pinned in the tests,
+because the result contract cites a base SHA per class and a SHA that moves makes a result
+unreproducible.
+
+The order is splice-then-strip — splicing needs the markers, and the scored tree has none — so
+every branch is verified **at the git level** after it is written: it changes exactly the paths the
+plan lists, the bytes at those paths are the planner's bytes, the diff is non-empty, no line of it
+mentions the marker token, and the lines `git diff` prints are the lines the edit makes. That last
+one is compared as a multiset and not as a sequence, which is a ruling and not a shortcut: on six
+branches, all of them `frontend/src/app/app.routing.ts`, git anchors its hunk one bare `  {`
+earlier than `src/base-tree.mjs`'s `lineHunks` does. Both alignments are minimal and the file
+repeats the line, so there is more than one minimal alignment. Asserting the sequence would be
+asserting which Myers implementation ran.
 
 ## The six things worth knowing before reading the code
 
