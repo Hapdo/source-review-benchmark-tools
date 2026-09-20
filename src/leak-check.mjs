@@ -31,6 +31,18 @@ import { createHash } from "node:crypto";
 export const MIN_SIGNIFICANT_CHARS = 24;
 
 /**
+ * And below this many words it is an identifier, however long that identifier is.
+ *
+ * `"resetPasswordBjoernChallenge",` clears the character bar comfortably and carries nothing
+ * private: challenge key names are in the corpus's own markers. It is exactly the line a test in
+ * the public repository is entitled to contain, and the first real run of this check flagged it —
+ * from the private repository's *serialized JSON*, where the same key sits on a line of its own.
+ * A check that fires on a public identifier gets switched off, so the bar is content-shaped: a
+ * sentence or a line of code, not a name.
+ */
+export const MIN_SIGNIFICANT_WORDS = 4;
+
+/**
  * Normalise a line so that the easy accidents do not defeat the check.
  *
  * Whitespace is collapsed, and a leading comment introducer is dropped. The second one is there
@@ -47,7 +59,9 @@ export function normaliseLine(line) {
 
 /** Whether a line carries enough content to be worth hashing. */
 export function isSignificant(line) {
-  return normaliseLine(line).replace(/\s/g, "").length >= MIN_SIGNIFICANT_CHARS;
+  const normalised = normaliseLine(line);
+  if (normalised.replace(/\s/g, "").length < MIN_SIGNIFICANT_CHARS) return false;
+  return normalised.split(/\s+/).filter(Boolean).length >= MIN_SIGNIFICANT_WORDS;
 }
 
 /** The hash a line is recorded under. Truncated: this is a tripwire, not a signature. */
@@ -79,7 +93,12 @@ export function buildLeakHashes(privateTexts, publicTexts) {
       if (!publicHashes.has(h)) hashes.add(h);
     }
   }
-  return { version: 1, minChars: MIN_SIGNIFICANT_CHARS, hashes: [...hashes].sort() };
+  return {
+    version: 1,
+    minChars: MIN_SIGNIFICANT_CHARS,
+    minWords: MIN_SIGNIFICANT_WORDS,
+    hashes: [...hashes].sort(),
+  };
 }
 
 /**

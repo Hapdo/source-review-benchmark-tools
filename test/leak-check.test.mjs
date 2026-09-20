@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MIN_SIGNIFICANT_CHARS,
+  MIN_SIGNIFICANT_WORDS,
   buildLeakHashes,
   checkForLeaks,
   hashLine,
@@ -31,8 +32,18 @@ describe("significance", () => {
     expect(hashLine(ANSWER_KEY_LINE.replace(/ /g, "   "))).toBe(hashLine(ANSWER_KEY_LINE));
   });
 
-  it("states the threshold as data rather than hiding it in the hash list", () => {
+  it("ignores a long identifier on a line of its own", () => {
+    // `"resetPasswordBjoernChallenge",` clears the character bar and carries nothing private:
+    // challenge key names are in the corpus's own markers. The first real run of this check
+    // flagged exactly that line in the public repository's own test, from the private key's
+    // serialized JSON. A check that fires on a public identifier gets switched off.
+    expect(isSignificant('      "resetPasswordBjoernChallenge",')).toBe(false);
+    expect(isSignificant("chatbotGreedyInjectionChallenge_2_correct.ts")).toBe(false);
+  });
+
+  it("states both thresholds as data rather than hiding them in the hash list", () => {
     expect(MIN_SIGNIFICANT_CHARS).toBeGreaterThan(8);
+    expect(MIN_SIGNIFICANT_WORDS).toBeGreaterThan(1);
   });
 });
 
