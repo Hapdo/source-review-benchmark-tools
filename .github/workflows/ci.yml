@@ -1,0 +1,38 @@
+name: ci
+
+# The leak check runs first and on its own job, because it is a precondition of this repository
+# existing rather than one of its checks. A test suite that ran before it could publish the thing
+# the check exists to keep unpublished, and a held-out generation is single-use: a leaked fixture
+# retires one somebody paid to write.
+on:
+  push:
+  pull_request:
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: node bin/leak-check.mjs
+
+  test:
+    needs: leak-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm ci
+
+      # The conformance suite asserts agreement with upstream at the pinned SHA, which this
+      # repository does not vendor. Without the checkout those suites skip, and a skipped
+      # conformance suite is the one result this repository must never report as green.
+      - name: Clone the pinned corpus
+        run: |
+          git clone --filter=blob:none https://github.com/juice-shop/juice-shop.git /tmp/juice-shop
+          git -C /tmp/juice-shop checkout 1618a611b173b4bf114028e6e02549950606e29d
+      - run: npm test
+        env:
+          JUICE_SHOP_DIR: /tmp/juice-shop

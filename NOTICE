@@ -1,0 +1,15 @@
+This repository contains tooling that operates on OWASP Juice Shop.
+
+    OWASP Juice Shop
+    Copyright (c) 2014-2026 Bjoern Kimminich & the OWASP Juice Shop contributors
+    SPDX-License-Identifier: MIT
+    https://github.com/juice-shop/juice-shop
+
+Juice Shop's source is not vendored here. `src/markers.mjs` contains a port of
+`lib/codingChallenges.ts#getCodingChallengeFromFileContent` and `src/rsn.mjs` a
+port of `rsn/rsnUtil.ts#computeDiffs`, both kept deliberately literal so that
+this repository's output can be checked against upstream's rather than merely
+resemble it. Both are used under the MIT licence above.
+
+The corpus this tooling reads is pinned at
+1618a611b173b4bf114028e6e02549950606e29d (2026-08-10).
