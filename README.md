@@ -27,8 +27,10 @@ JUICE_SHOP_DIR=/tmp/juice-shop npm test
 | `bin/strip.mjs <in> <out> <map>` | writes the scored tree and the line map generated from it |
 | `bin/verify-stripped.mjs <checkout>` | asserts a tree carries no marker, no codefix, no `challenges.yml` |
 | `bin/splice.mjs <checkout> <key> <variant>` | splices one codefix variant back into its block |
+| `bin/build-base.mjs <checkout> <outdir> [manifest]` | composes all 35 correct variants into the repaired base tree |
+| `bin/parse-check.mjs <tree>` | gates a tree on semgrep 1.99.0 parsing every scored file |
 
-## The five things worth knowing before reading the code
+## The six things worth knowing before reading the code
 
 **1. The splice target is the displayed snippet, not the block.** A variant in
 `data/static/codefixes/` is an edit of what Juice Shop's UI *shows*, which is a non-contiguous
@@ -57,6 +59,16 @@ the diff alignment match upstream's, neither of which the corpus alone can confi
 the variant back. Nothing weaker separates a correct splice from one that is two lines off, because
 both produce a file that parses — and a tree that parses wrongly is scored rather than reported.
 
+**6. `spliceVariant` leaves a stray line behind on a multi-key `end` marker.** `extractSnippet`'s
+boundary match stops at the key it was given, part-way along an `end` marker naming several; the
+rest returns as `suffix`, which the splicer emits as its own line. Splicing `app.routing.ts` on
+`adminSectionChallenge` appends a bare ` scoreBoardChallenge web3SandboxChallenge` — two juxtaposed
+identifiers, in a file that then would not parse. **8 of 23 blocks** are affected, and the round
+trip cannot see it: re-extracting on the same key stops at the same point, past which the stray line
+sits. `src/base-tree.mjs` works around it by anchoring every splice on the *last* key its `end`
+marker names, asserted as a property over all 23 blocks. The real fix is for the splicer to tell a
+`start` marker's live-code suffix from an `end` marker's leftover keys.
+
 ## What the tools refuse to do
 
 **121 of the 125 variants splice and round-trip exactly.** The four that do not all belong to
@@ -69,6 +81,20 @@ function declaration from `routes/chat.ts`, so `spliceVariantChecked` throws and
 `test/splice.test.mjs` asserts the separation rather than the list: the least-drifted refusal is
 more drifted than the most-drifted acceptance. If that stops holding, either the four are no longer
 special or a new variant has drifted and needs the same treatment.
+
+The one the base tree needs — `_2_correct` — is therefore applied by hand, in
+`src/b13-hand-repair.mjs`, and only after `chatbotPromptInjectionChallenge` has spliced. Upstream
+marks the same `discount:` line `vuln-line` for both keys, so the other order overwrites the fix and
+nothing errors. The repair refuses unless it finds B14 already applied, and refuses a second
+application rather than no-opping: it is the one step with no round trip behind it, so a
+double-apply has to be visible.
+
+**The base tree parses and does not typecheck, on purpose.** Upstream's correct variants call
+functions nobody has written — `validatePasswordHasAtLeastTenChar`, `security.isAdmin`,
+`OrderStatus` — because upstream only ever displays them. `src/base-tree.mjs` declares each one in
+`BASE_TREE_DEFECTS` and `verifyBaseTree` demands the line still be present, so a re-cut variant
+retires the entry rather than the entry outliving the defect. Patching them would be inventing Juice
+Shop code and would decouple the base from the correct-fix class, which lands these same variants.
 
 ## Licence
 
