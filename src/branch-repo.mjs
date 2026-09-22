@@ -111,6 +111,23 @@ export const PINNED_IDENTITY = Object.freeze({
 export const PINNED_DATE = "1767225600 +0000";
 
 /**
+ * A branch commit's date: {@link PINNED_DATE} plus the branch's published number, in seconds.
+ *
+ * **Every branch commit must be a different commit**, because GitHub attaches check runs to a
+ * commit and not to a pull request: two pull requests with one head SHA share one `review/*`
+ * check, and the benchmark cannot score them separately. Twelve branches are byte-identical to
+ * another — several challenge keys' fixes are the same edit to one file — and once the messages
+ * stopped naming the key (HD-56), identical tree, parent, message and date made identical SHAs.
+ * The date is what differs now. It is derived from `pr/NNN`, which is already public and already
+ * meaningless, so it says nothing a reviewer could use; and it is deterministic, so two runs agree.
+ */
+export function publishedDate(ref) {
+  const n = Number(ref.slice(ref.lastIndexOf("/") + 1));
+  if (!Number.isInteger(n) || n < 1) throw new RepoRefused(`${ref} carries no branch number to date it by`);
+  return `${Number(PINNED_DATE.split(" ")[0]) + n} +0000`;
+}
+
+/**
  * Configuration forced into the created repository, each because of what it would otherwise take
  * from the machine. Written into the repository's own config so that a later `git` run by a human
  * in this repository sees the same settings the generation did.
@@ -230,10 +247,10 @@ export function gitEnv(extra = {}) {
  *
  * @param {string} gitDir the repository directory
  * @param {string[]} args
- * @param {{input?: string|Buffer, encoding?: "utf8"|"buffer", indexFile?: string}} [options]
+ * @param {{input?: string|Buffer, encoding?: "utf8"|"buffer", indexFile?: string, env?: Record<string, string>}} [options]
  */
 export function git(gitDir, args, options = {}) {
-  const env = gitEnv(options.indexFile ? { GIT_INDEX_FILE: options.indexFile } : {});
+  const env = gitEnv({ ...(options.indexFile ? { GIT_INDEX_FILE: options.indexFile } : {}), ...(options.env ?? {}) });
   const result = spawnSync("git", ["--git-dir", gitDir, ...args], {
     env,
     input: options.input,
@@ -393,11 +410,12 @@ export function neutralMessage(paths) {
 }
 
 /** Commit a tree under the pinned identity and date, and point a branch at it. */
-export function commitTree(gitDir, { tree, parent, message, branch }) {
+export function commitTree(gitDir, { tree, parent, message, branch, date }) {
   const args = ["commit-tree", tree];
   if (parent) args.push("-p", parent);
   args.push("-m", message);
-  const commit = git(gitDir, args).trim();
+  const env = date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {};
+  const commit = git(gitDir, args, { env }).trim();
   git(gitDir, ["update-ref", `refs/heads/${branch}`, commit]);
   return commit;
 }
@@ -640,6 +658,7 @@ export function commitBranches(gitDir, indexFile, { baseCommit, records }) {
       parent,
       message: neutralMessage(record.files.map((f) => f.path)),
       branch: record.ref,
+      date: publishedDate(record.ref),
     });
     commits.set(record.id, commit);
 
@@ -759,6 +778,8 @@ export function pathsAt(gitDir, commit) {
  *    branch commit's message is {@link neutralMessage} of the paths *git* says it changes. Asked
  *    of the repository rather than of the records, so a ref or a commit this module did not mean
  *    to write is caught too.
+ * 8. **Is every branch its own commit?** Check runs attach to a commit, so two branches at one SHA
+ *    are two pull requests with one review. See {@link publishedDate}.
  *
  * Findings rather than throws, so one run names everything that is wrong.
  */
@@ -776,6 +797,13 @@ export function verifyBranchRepo(gitDir, { baseCommit, branches, records }) {
   }
   if (git(gitDir, ["log", "-1", "--format=%B", baseCommit]).replace(/\n+$/, "\n") !== BASE_MESSAGE) {
     fail(BASE_BRANCH, "the base commit carries a message other than the pinned one");
+  }
+
+  // 8. One commit per branch.
+  const byCommit = new Map();
+  for (const branch of branches) byCommit.set(branch.commit, [...(byCommit.get(branch.commit) ?? []), branch.ref ?? branch.name]);
+  for (const [commit, refs] of byCommit) {
+    if (refs.length > 1) fail(refs.join(", "), `share commit ${commit}, so their pull requests would share one set of checks`);
   }
 
   for (const branch of branches) {
@@ -976,6 +1004,15 @@ export async function generateBranchRepo({ checkout, outRepo, indexFile, corpusS
       branches: branches.map((b) => ({
         ref: b.ref,
         baseRef: b.baseRef,
+        /**
+         * The other published branches whose change is byte-identical to this one — same base,
+         * same tree. They are separate pull requests (see `publishedDate`), but they are one
+         * observation, and a scorer that counts them as independent overstates its sample.
+         */
+        sameChangeAs: branches
+          .filter((o) => o !== b && o.baseCommit === b.baseCommit && o.tree === b.tree)
+          .map((o) => o.ref)
+          .sort(),
         name: b.name,
         class: b.class,
         about: records.find((r) => r.id === b.id).about,

@@ -273,7 +273,9 @@ describe("the same inputs give the same SHAs", () => {
     const [an, ae, at, cn, ce, ct] = shown.split("|");
     expect([an, cn]).toEqual([PINNED_IDENTITY.name, PINNED_IDENTITY.name]);
     expect([ae, ce]).toEqual([PINNED_IDENTITY.email, PINNED_IDENTITY.email]);
-    expect([at, ct]).toEqual([PINNED_DATE.split(" ")[0], PINNED_DATE.split(" ")[0]]);
+    // pr/002: the pinned date plus its number, so that byte-identical branches are still two commits.
+    const when = String(Number(PINNED_DATE.split(" ")[0]) + 2);
+    expect([at, ct]).toEqual([when, when]);
     // The fix branch is cut from the introduce-the-vuln head, not from the base.
     expect(branches[1].baseCommit).toBe(branches[0].commit);
     expect(branches[0].baseCommit).toBe(first.base.commit);
@@ -398,6 +400,21 @@ describe("what a reviewer reads besides the diff (HD-56)", () => {
     expect(reasons).toMatch(/neither the base nor pr\/NNN/);
   });
 
+  it("makes byte-identical branches two commits, and reports two branches at one SHA", () => {
+    const records = FIXTURE_RECORDS();
+    records.push({ ...records[0], id: "introduce/a-again", name: "fixture/introduce/a-again", ref: "pr/003" });
+    const built = buildFixtureRepo(writeFixtureCheckout(fresh("twin-co")), fresh("twin-repo"), records);
+    const [one, , three] = built.branches;
+    expect(one.tree).toBe(three.tree);
+    expect(one.commit).not.toBe(three.commit);
+    const report = verifyBranchRepo(built.gitDir, {
+      baseCommit: built.base.commit,
+      branches: [one, { ...three, commit: one.commit }],
+      records,
+    });
+    expect(report.findings.map((f) => f.reason).join("\n")).toMatch(/share commit/);
+  });
+
   it("numbers refs by digest, so no class sits in its own number range", () => {
     const names = [...Array(20)].map((_, i) => `hd85/${i < 10 ? "introduce" : "broken-fix"}/x${i}`);
     const refs = publishedRefs(names);
@@ -456,9 +473,9 @@ const MEASURED = Object.freeze({
    * code would still agree with each other. Only a pinned SHA notices that.
    */
   commits: Object.freeze({
-    "hd85/introduce/routes-login-ts-17": "e93badea2ab987e87906d29e50f4f1943c7703d6",
-    "hd85/correct-fix/loginAdminChallenge_4_correct": "4fa5ff4de2f12476b5f2e6f75f7fc69c1138d9f4",
-    "control/unmarked/config-7ms-yml": "cb2285e56ba7ae926bb4213d3bd9a992e14e6bb7",
+    "hd85/introduce/routes-login-ts-17": "f8b331c6f07dcf090257686ef203caa6e12b4e03",
+    "hd85/correct-fix/loginAdminChallenge_4_correct": "e4caead15f0c948aabafe2ca6fa7fd13395d806c",
+    "control/unmarked/config-7ms-yml": "9680dcfc6bf455195acb2a0ca7d9bd8a1705b58f",
   }),
   baseFiles: 1138,
   baseRewritten: 19,
@@ -588,6 +605,16 @@ describe.skipIf(!haveCorpus)(`the generated repository, against the pinned corpu
     expect(json).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     expect(full.manifest.identity.date).toBe(PINNED_DATE);
     expect(full.manifest.corpus.pinnedSha).toBe(PINNED_SHA_OF_CORPUS);
+  });
+
+  it("HD-56: every one of the 179 branches is its own commit, so each pull request gets its own checks", () => {
+    expect(new Set(full.manifest.branches.map((b) => b.commit)).size).toBe(MEASURED.branches);
+  });
+
+  it("MEASURED: twelve branches repeat another's change, and the manifest names each group", () => {
+    const repeats = full.manifest.branches.filter((b) => b.sameChangeAs.length > 0);
+    const groups = new Set(repeats.map((b) => [b.ref, ...b.sameChangeAs].sort().join(" ")));
+    expect(repeats.length - groups.size).toBe(12);
   });
 
   it("HD-56: every ref is main or pr/NNN, and every message is only the paths its diff changes", () => {

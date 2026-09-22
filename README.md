@@ -49,6 +49,12 @@ against the repository, not the records. The mapping from `pr/NNN` back to class
 is in the manifest only, which is written beside the repository, is private, and is never pushed
 with the refs.
 
+**Every branch is its own commit.** Twelve branches make the same edit as another — several
+challenge keys share one fix — and with neutral messages they would be the same commit. GitHub
+attaches checks to a commit, so those pull requests would share one review. Each branch commit is
+therefore dated the pinned date plus its `pr/NNN` number in seconds, and the manifest's
+`sameChangeAs` names each group so the scorer does not count one change as several observations.
+
 It writes no working tree at any point. Everything is plumbing over an explicit index —
 `hash-object`, `update-index`, `write-tree`, `commit-tree` — because a working tree is where the
 nondeterminism lives: `core.autocrlf` rewrites line endings on the way in, `.gitattributes`
