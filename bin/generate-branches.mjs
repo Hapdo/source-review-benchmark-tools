@@ -4,12 +4,14 @@
  *
  * Usage: node bin/generate-branches.mjs <juice-shop-checkout> <out-repo> [manifest.json]
  *
- * It builds the repaired base tree, strips it, verifies the strip, commits it as `hd85/base`, and
+ * It builds the repaired base tree, strips it, verifies the strip, commits it as `main`, and
  * then cuts every branch both planners describe — 144 splice-derived branches over three classes
- * and 35 controls over two — each from the commit its plan names. The manifest defaults to
+ * and 35 controls over two — each from the commit its plan names, published as `pr/001`…`pr/179`
+ * with a message naming only the paths it changes. The manifest defaults to
  * `<out-repo>.manifest.json`, **beside** the repository rather than inside it, for the reason
  * `bin/build-base.mjs` keeps its own manifest outside the tree: anything committed that upstream
- * does not have is a diff every generated pull request carries.
+ * does not have is a diff every generated pull request carries. It is also the only place that
+ * says which `pr/NNN` is which class, so it is private and is never pushed with the refs.
  *
  * Three refusals worth knowing about before reading the code:
  *

@@ -65,8 +65,29 @@ export class RepoRefused extends Error {
 /* What is pinned                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** The branch the whole benchmark is cut from. Every other ref names it, directly or by parent. */
-export const BASE_BRANCH = "hd85/base";
+/**
+ * The branch the whole benchmark is cut from. Every other ref names it, directly or by parent.
+ *
+ * `main`, because this is the ref the mirror publishes and a reviewer is shown: a name like
+ * `hd85/base` says the repository is a benchmark before a single line has been read. The plan's own
+ * names survive in the manifest, which stays private; see {@link PUBLISHED_REF}.
+ */
+export const BASE_BRANCH = "main";
+
+/**
+ * Every published branch other than the base: `pr/001` to `pr/179`, and nothing else.
+ *
+ * **The reviewer reads ref names and commit messages, and the plan's names are the answer key.**
+ * `hd85/broken-fix/accessLogDisclosureChallenge_2` names the class, the challenge and the variant;
+ * `control/marked/…` says "expect nothing here"; and a fix branch's parent commit said
+ * `introduce-the-vuln` in its subject. BM-04 ruled that the answer key leaves every scored tree,
+ * and a ref name or a commit message is the same leak through the one channel the file-content
+ * checks never read. Found on 2026-09-22 (HD-56), before anything was pushed.
+ *
+ * The number is the branch's position in {@link publishedOrder}, not in the plan, because the plan
+ * is ordered by class and a sorted order would put each class in its own number range.
+ */
+export const PUBLISHED_REF = /^pr\/\d{3}$/;
 
 /**
  * The author and committer of every commit here.
@@ -340,6 +361,37 @@ export function writeTreeOver(gitDir, indexFile, baseCommit, files) {
   return git(gitDir, ["write-tree"], { indexFile }).trim();
 }
 
+/**
+ * The order the published refs are numbered in: by a digest of each plan name.
+ *
+ * Deterministic, because the SHAs and the numbers are pinned and two runs must agree. Not secret:
+ * the salt and the names are both in this public repository, so anyone holding the tooling can
+ * recompute the mapping. That is acceptable because the mapping is hidden from the **reviewer**,
+ * which reads a pull request, not this code — and the mapping itself is recorded only in the
+ * private manifest.
+ */
+export function publishedOrder(names) {
+  const key = (name) => sha256(`hd85 published order\0${name}`);
+  return [...names].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+/** `pr/001`…, assigned over {@link publishedOrder}. */
+export function publishedRefs(names) {
+  const width = Math.max(3, String(names.length).length);
+  return new Map(publishedOrder(names).map((name, i) => [name, `pr/${String(i + 1).padStart(width, "0")}`]));
+}
+
+/**
+ * The only commit message a branch commit may carry: the paths its diff changes, and nothing more.
+ *
+ * A function of the diff and of nothing else, so that it cannot say anything the diff does not
+ * already show — and {@link verifyBranchRepo} asserts exactly that equality against the paths git
+ * reports, rather than scanning the message for words it should not contain.
+ */
+export function neutralMessage(paths) {
+  return `Update ${[...paths].sort().join(", ")}\n`;
+}
+
 /** Commit a tree under the pinned identity and date, and point a branch at it. */
 export function commitTree(gitDir, { tree, parent, message, branch }) {
   const args = ["commit-tree", tree];
@@ -477,13 +529,14 @@ export function commitScoredBase(gitDir, indexFile, { checkout, scored }) {
   return { commit, tree, files: entries.length, rewritten: fromMemory.length, entries };
 }
 
-/** The base branch's commit message. A constant, because a commit message is part of the SHA. */
-const BASE_MESSAGE =
-  "hd85: the scored base tree\n" +
-  "\n" +
-  "OWASP Juice Shop at its pinned commit, with every challenge key's correct codefix applied,\n" +
-  "then stripped: no marker comments, no data/static/codefixes/, no data/static/challenges.yml.\n" +
-  "Every branch in this repository is cut from here or from a branch that is.\n";
+/**
+ * The base branch's commit message. A constant, because a commit message is part of the SHA.
+ *
+ * Deliberately says nothing. It used to describe the tree — "every challenge key's correct codefix
+ * applied, then stripped" — which tells a reviewer both that the repository is a benchmark and
+ * where the defects were taken out. See {@link PUBLISHED_REF}.
+ */
+export const BASE_MESSAGE = "Initial import\n";
 
 /* -------------------------------------------------------------------------- */
 /* The branches                                                                */
@@ -513,15 +566,13 @@ export function branchRecords(branchPlan, controlPlan) {
       class: branch.class,
       baseId: branch.base === "base" ? null : branch.base,
       files: branch.files.map((f) => ({ path: f.path, content: f.scored, sha256: f.scoredSha256 })),
-      subject: `${branch.class}: ${branch.variant ?? branch.itemSlug}`,
-      body: [
-        `item: ${branch.item}`,
-        `keys: ${branch.keys.join(", ")}`,
-        branch.variant ? `variant: data/static/codefixes/${branch.variant}` : null,
-        `built by: ${branch.builtBy}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      // What the branch *is*. Recorded in the private manifest, never committed: see PUBLISHED_REF.
+      about: {
+        item: branch.item,
+        keys: branch.keys,
+        variant: branch.variant ? `data/static/codefixes/${branch.variant}` : null,
+        builtBy: branch.builtBy,
+      },
     });
   }
   for (const control of controlPlan.branches) {
@@ -532,12 +583,11 @@ export function branchRecords(branchPlan, controlPlan) {
       class: control.class,
       baseId: null,
       files: [{ path: control.path, content: scored, sha256: sha256(scored) }],
-      subject: `${control.class}: ${control.path}`,
-      body: [
-        `edit: one comment at line ${control.editLine} of the marked file`,
-        `paired block: ${control.pairedBlock ?? "(none — this file carries no block)"}`,
-        "expected findings on this diff: 0",
-      ].join("\n"),
+      about: {
+        editLine: control.editLine,
+        pairedBlock: control.pairedBlock ?? null,
+        expectedFindings: 0,
+      },
     });
   }
   return records;
@@ -559,8 +609,14 @@ export function commitBranches(gitDir, indexFile, { baseCommit, records }) {
   const commits = new Map([["base", baseCommit]]);
   const out = [];
   const seenNames = new Set();
+  const seenRefs = new Set();
 
   for (const record of records) {
+    if (!record.ref || !PUBLISHED_REF.test(record.ref)) {
+      throw new RepoRefused(`${record.name} has no published ref of the form pr/NNN, so its plan name would be published instead`);
+    }
+    if (seenRefs.has(record.ref)) throw new RepoRefused(`two branches are published as ${record.ref}`);
+    seenRefs.add(record.ref);
     if (seenNames.has(record.name)) throw new RepoRefused(`two branches are named ${record.name}`);
     for (const other of seenNames) {
       if (other.startsWith(`${record.name}/`) || record.name.startsWith(`${other}/`)) {
@@ -582,16 +638,18 @@ export function commitBranches(gitDir, indexFile, { baseCommit, records }) {
     const commit = commitTree(gitDir, {
       tree,
       parent,
-      message: `${record.subject}\n\n${record.body}\n`,
-      branch: record.name,
+      message: neutralMessage(record.files.map((f) => f.path)),
+      branch: record.ref,
     });
     commits.set(record.id, commit);
 
     out.push({
       id: record.id,
       name: record.name,
+      ref: record.ref,
       class: record.class,
       base: record.baseId == null ? BASE_BRANCH : nameOf(records, record.baseId),
+      baseRef: record.baseId == null ? BASE_BRANCH : refOf(records, record.baseId),
       baseCommit: parent,
       commit,
       tree,
@@ -599,6 +657,12 @@ export function commitBranches(gitDir, indexFile, { baseCommit, records }) {
     });
   }
   return out;
+}
+
+function refOf(records, id) {
+  const found = records.find((r) => r.id === id);
+  if (!found) throw new RepoRefused(`no record is named ${id}`);
+  return found.ref;
 }
 
 function nameOf(records, id) {
@@ -690,6 +754,11 @@ export function pathsAt(gitDir, commit) {
  *    the change under review, and this is the last place to ask before the refs exist.
  * 6. **Is the branch cut from the commit the plan named?** Checked as a parent, so a fix class
  *    whose introduce-the-vuln head was rebuilt cannot quietly be cut from the base tree instead.
+ * 7. **Does anything the reviewer reads besides the diff say what the branch is?** Every ref in the
+ *    repository is `main` or `pr/NNN`, the base commit carries {@link BASE_MESSAGE}, and every
+ *    branch commit's message is {@link neutralMessage} of the paths *git* says it changes. Asked
+ *    of the repository rather than of the records, so a ref or a commit this module did not mean
+ *    to write is caught too.
  *
  * Findings rather than throws, so one run names everything that is wrong.
  */
@@ -697,6 +766,17 @@ export function verifyBranchRepo(gitDir, { baseCommit, branches, records }) {
   const findings = [];
   const fail = (branch, reason) => findings.push({ branch, reason });
   const byId = new Map(records.map((r) => [r.id, r]));
+
+  // 7. What the reviewer reads that is not the diff.
+  for (const ref of git(gitDir, ["for-each-ref", "--format=%(refname)"]).split("\n").filter(Boolean)) {
+    const short = ref.replace(/^refs\/heads\//, "");
+    if (!ref.startsWith("refs/heads/") || (short !== BASE_BRANCH && !PUBLISHED_REF.test(short))) {
+      fail(short, "is a ref a reviewer would see, and is neither the base nor pr/NNN");
+    }
+  }
+  if (git(gitDir, ["log", "-1", "--format=%B", baseCommit]).replace(/\n+$/, "\n") !== BASE_MESSAGE) {
+    fail(BASE_BRANCH, "the base commit carries a message other than the pinned one");
+  }
 
   for (const branch of branches) {
     const record = byId.get(branch.id);
@@ -710,6 +790,10 @@ export function verifyBranchRepo(gitDir, { baseCommit, branches, records }) {
     if (record.baseId == null && branch.baseCommit !== baseCommit) fail(branch.name, "claims the base branch and is cut elsewhere");
 
     const diff = diffCommits(gitDir, branch.baseCommit, branch.commit);
+    const message = git(gitDir, ["log", "-1", "--format=%B", branch.commit]).replace(/\n+$/, "\n");
+    if (message !== neutralMessage([...diff.keys()])) {
+      fail(branch.name, `${branch.ref}'s commit message says more than the paths its diff changes`);
+    }
     const planned = new Set(record.files.map((f) => f.path));
     for (const seen of diff.keys()) {
       if (!planned.has(seen)) fail(branch.name, `changes ${seen}, which the plan does not list`);
@@ -827,6 +911,8 @@ export async function generateBranchRepo({ checkout, outRepo, indexFile, corpusS
   const branchPlan = planBranches({ upstream: tree, base: base.marked, codefixes: fixes });
   const controlPlan = planControlBranches(base.marked);
   const records = branchRecords(branchPlan, controlPlan);
+  const refs = publishedRefs(records.map((r) => r.name));
+  for (const record of records) record.ref = refs.get(record.name);
 
   const gitDir = initRepo(outRepo);
   const index = indexFile ?? path.join(gitDir, "hd85.index");
@@ -882,9 +968,17 @@ export async function generateBranchRepo({ checkout, outRepo, indexFile, corpusS
          */
         lineMap: base.lineMap,
       },
+      /**
+       * Every branch as published (`ref`, `baseRef`) and as planned (`name`, `class`, `about`).
+       * **This mapping is the answer key for the ref names**, which is why the manifest is written
+       * beside the repository and never into it, and why it is not pushed with the refs.
+       */
       branches: branches.map((b) => ({
+        ref: b.ref,
+        baseRef: b.baseRef,
         name: b.name,
         class: b.class,
+        about: records.find((r) => r.id === b.id).about,
         base: b.base,
         baseCommit: b.baseCommit,
         commit: b.commit,

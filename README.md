@@ -34,11 +34,20 @@ JUICE_SHOP_DIR=/tmp/juice-shop npm test
 ## The branch repository
 
 `bin/generate-branches.mjs` turns the two branch plans into refs. It commits the repaired,
-stripped base tree as `hd85/base`, then cuts 144 splice-derived branches — 22 introduce-the-vuln,
+stripped base tree as `main`, then cuts 144 splice-derived branches — 22 introduce-the-vuln,
 87 broken-fix, 35 correct-fix — and 35 controls, 179 in all, each from the commit its plan names.
 The fix classes are cut from the **introduce-the-vuln head for the same block**, because a fix
 branch cut from the base would be a diff against code that was never vulnerable. Nothing pushes:
 it writes a local bare repository and stops.
+
+**What gets published says nothing the diff does not.** The plan names branches by class and
+challenge — `hd85/broken-fix/accessLogDisclosureChallenge_2`, `control/marked/…` — and those names
+are the answer key. So the repository holds only `main` and `pr/001`…`pr/179`, numbered by a digest
+of each plan name so that no class sits in its own number range, and every commit message is
+`Update <the paths it changes>`; the base commit says `Initial import`. Verification asserts both
+against the repository, not the records. The mapping from `pr/NNN` back to class, block and variant
+is in the manifest only, which is written beside the repository, is private, and is never pushed
+with the refs.
 
 It writes no working tree at any point. Everything is plumbing over an explicit index —
 `hash-object`, `update-index`, `write-tree`, `commit-tree` — because a working tree is where the
@@ -51,7 +60,7 @@ are pinned, the repository's own config is written rather than inherited, and ev
 invocation runs with the machine's config pointed at `/dev/null`. `test/branch-repo.test.mjs`
 generates the whole thing twice, into two repositories, and requires every ref and the entire
 manifest to be byte-identical; a third fixture run does it with a hostile identity in the
-environment. The base branch is at `1bde277564d76eb455721866688474d80a54d509`, pinned in the tests,
+environment. The base branch is at `26123d9fda6a6b9a1c3f2acc339ac4ae10dfe602`, pinned in the tests,
 because the result contract cites a base SHA per class and a SHA that moves makes a result
 unreproducible.
 
