@@ -531,13 +531,15 @@ describe.skipIf(!haveCorpus)(`the generated repository, against the pinned corpu
     expect(total).toBe(MEASURED.markerMentions);
   });
 
+  // A few git calls per branch over 179 branches: about 2s on a laptop and just over vitest's 5s
+  // default on a CI runner, so it states its own budget as the second generation below does.
   it("holds every branch to its plan at the git level", () => {
     expect(verifyBranchRepo(full.gitDir, {
       baseCommit: full.manifest.base.commit,
       branches: full.branches,
       records: full.records,
     })).toMatchObject({ ok: true, findings: [] });
-  });
+  }, 60_000);
 
   it("cuts each fix class from the introduce-the-vuln head for its own block, not from the base", () => {
     const heads = new Map(full.branches.filter((b) => b.class === "introduce-the-vuln").map((b) => [b.name, b.commit]));
