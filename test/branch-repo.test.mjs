@@ -8,6 +8,7 @@ import { lineHunks, sha256 } from "../src/base-tree.mjs";
 import { STRIPPED_PATHS } from "../src/strip.mjs";
 import {
   BASE_BRANCH,
+  BASE_MESSAGE,
   NEUTRALISED_ENV,
   PINNED_DATE,
   PINNED_IDENTITY,
@@ -16,6 +17,7 @@ import {
   branchRecords,
   commitBranches,
   commitScoredBase,
+  commitTree,
   diffCommits,
   fileAt,
   generateBranchRepo,
@@ -23,6 +25,8 @@ import {
   gitEnv,
   initRepo,
   pathsAt,
+  PUBLISHED_REF,
+  publishedRefs,
   verifyBranchRepo,
   walkCheckout,
   writeTreeOver,
@@ -84,20 +88,20 @@ const FIXTURE_RECORDS = () => {
     {
       id: "introduce/a",
       name: "fixture/introduce/a",
+      ref: "pr/001",
       class: "introduce-the-vuln",
       baseId: null,
       files: [{ path: "a.ts", content: one, sha256: sha256(one) }],
-      subject: "introduce-the-vuln: a.ts",
-      body: "item: a.ts:1",
+      about: { item: "a.ts:1" },
     },
     {
       id: "correct-fix/a",
       name: "fixture/correct-fix/a",
+      ref: "pr/002",
       class: "correct-fix",
       baseId: "introduce/a",
       files: [{ path: "a.ts", content: two, sha256: sha256(two) }],
-      subject: "correct-fix: a.ts",
-      body: "item: a.ts:1",
+      about: { item: "a.ts:1" },
     },
   ];
 };
@@ -367,6 +371,43 @@ describe("verifyBranchRepo", () => {
   });
 });
 
+describe("what a reviewer reads besides the diff (HD-56)", () => {
+  it("publishes only main and pr/NNN, and a message naming only the changed paths", () => {
+    const { gitDir, base, branches } = buildFixtureRepo(writeFixtureCheckout(fresh("ref-co")), fresh("ref-repo"));
+    const refs = git(gitDir, ["for-each-ref", "--format=%(refname:short)"]).trim().split("\n");
+    expect(refs.sort()).toEqual(["main", "pr/001", "pr/002"]);
+    expect(git(gitDir, ["log", "-1", "--format=%B", base.commit])).toBe(`${BASE_MESSAGE}\n`);
+    for (const b of branches) expect(git(gitDir, ["log", "-1", "--format=%B", b.commit])).toBe("Update a.ts\n\n");
+  });
+
+  it("refuses a record with no published ref, rather than publishing its plan name", () => {
+    const records = FIXTURE_RECORDS();
+    delete records[0].ref;
+    expect(() => buildFixtureRepo(writeFixtureCheckout(fresh("noref-co")), fresh("noref-repo"), records)).toThrow(/no published ref/);
+  });
+
+  it("reports a commit whose message says more than its paths, and a ref that is not pr/NNN", () => {
+    const built = buildFixtureRepo(writeFixtureCheckout(fresh("leak-co")), fresh("leak-repo"));
+    const { gitDir, base, records } = built;
+    const tree = git(gitDir, ["rev-parse", `${built.branches[0].commit}^{tree}`]).trim();
+    const leaky = commitTree(gitDir, { tree, parent: base.commit, message: "broken-fix: a.ts\n", branch: "hd85/broken-fix/a" });
+    const branches = [{ ...built.branches[0], commit: leaky }];
+    const report = verifyBranchRepo(gitDir, { baseCommit: base.commit, branches, records });
+    const reasons = report.findings.map((f) => f.reason).join("\n");
+    expect(reasons).toMatch(/says more than the paths its diff changes/);
+    expect(reasons).toMatch(/neither the base nor pr\/NNN/);
+  });
+
+  it("numbers refs by digest, so no class sits in its own number range", () => {
+    const names = [...Array(20)].map((_, i) => `hd85/${i < 10 ? "introduce" : "broken-fix"}/x${i}`);
+    const refs = publishedRefs(names);
+    const firstTen = [...refs].filter(([, ref]) => Number(ref.slice(3)) <= 10).map(([n]) => n);
+    expect(firstTen.some((n) => n.includes("introduce"))).toBe(true);
+    expect(firstTen.some((n) => n.includes("broken-fix"))).toBe(true);
+    expect(publishedRefs(names)).toEqual(refs);
+  });
+});
+
 describe("diffCommits", () => {
   const checkout = writeFixtureCheckout(fresh("checkout"));
   const built = buildFixtureRepo(checkout, fresh("repo"));
@@ -402,7 +443,11 @@ const MEASURED = Object.freeze({
     "unmarked-file": 19,
   }),
   changedFiles: 183,
-  baseCommit: "1bde277564d76eb455721866688474d80a54d509",
+  /**
+   * Was `1bde2775…` until 2026-09-22 (HD-56), when the base commit's message stopped describing the
+   * tree. The tree below did not move, which is the check that only the message did.
+   */
+  baseCommit: "26123d9fda6a6b9a1c3f2acc339ac4ae10dfe602",
   baseTree: "63d736beedd25f1de89722ff5b12738f01f620b5",
   /**
    * Three branch commits, one per shape: cut from the base, cut from an introduce-the-vuln head,
@@ -411,9 +456,9 @@ const MEASURED = Object.freeze({
    * code would still agree with each other. Only a pinned SHA notices that.
    */
   commits: Object.freeze({
-    "hd85/introduce/routes-login-ts-17": "57949c23723e815511748c2e0166041f912334b6",
-    "hd85/correct-fix/loginAdminChallenge_4_correct": "a7046e254468a87945e198fe5d9357544a2a5139",
-    "control/unmarked/config-7ms-yml": "fa09d48a5a81931ad6a929a5106cda9f3cc1fc66",
+    "hd85/introduce/routes-login-ts-17": "e93badea2ab987e87906d29e50f4f1943c7703d6",
+    "hd85/correct-fix/loginAdminChallenge_4_correct": "4fa5ff4de2f12476b5f2e6f75f7fc69c1138d9f4",
+    "control/unmarked/config-7ms-yml": "cb2285e56ba7ae926bb4213d3bd9a992e14e6bb7",
   }),
   baseFiles: 1138,
   baseRewritten: 19,
@@ -543,6 +588,18 @@ describe.skipIf(!haveCorpus)(`the generated repository, against the pinned corpu
     expect(json).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     expect(full.manifest.identity.date).toBe(PINNED_DATE);
     expect(full.manifest.corpus.pinnedSha).toBe(PINNED_SHA_OF_CORPUS);
+  });
+
+  it("HD-56: every ref is main or pr/NNN, and every message is only the paths its diff changes", () => {
+    const refs = git(full.gitDir, ["for-each-ref", "--format=%(refname:short)"]).trim().split("\n");
+    expect(refs.filter((r) => r !== BASE_BRANCH && !PUBLISHED_REF.test(r))).toEqual([]);
+    expect(git(full.gitDir, ["log", "-1", "--format=%B", full.manifest.base.commit])).toBe(`${BASE_MESSAGE}\n`);
+    // Equality with a message built from the paths alone, rather than a scan for words that should
+    // not be there: a scan only catches the words somebody thought of.
+    const wrong = full.manifest.branches.filter(
+      (b) => git(full.gitDir, ["log", "-1", "--format=%B", b.commit]) !== `Update ${b.files.map((f) => f.path).sort().join(", ")}\n\n`,
+    );
+    expect(wrong.map((b) => b.ref)).toEqual([]);
   });
 
   it("names the same plan both planners produce, by digest", () => {
