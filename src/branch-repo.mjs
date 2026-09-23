@@ -774,7 +774,8 @@ export function pathsAt(gitDir, commit) {
  * 6. **Is the branch cut from the commit the plan named?** Checked as a parent, so a fix class
  *    whose introduce-the-vuln head was rebuilt cannot quietly be cut from the base tree instead.
  * 7. **Does anything the reviewer reads besides the diff say what the branch is?** Every ref in the
- *    repository is `main` or `pr/NNN`, the base commit carries {@link BASE_MESSAGE}, and every
+ *    repository is `main` or `pr/NNN`, the base commit carries {@link BASE_MESSAGE} (or, for a base
+ *    commit added later, the neutral message of the paths it changes), and every
  *    branch commit's message is {@link neutralMessage} of the paths *git* says it changes. Asked
  *    of the repository rather than of the records, so a ref or a commit this module did not mean
  *    to write is caught too.
@@ -783,7 +784,7 @@ export function pathsAt(gitDir, commit) {
  *
  * Findings rather than throws, so one run names everything that is wrong.
  */
-export function verifyBranchRepo(gitDir, { baseCommit, branches, records }) {
+export function verifyBranchRepo(gitDir, { baseCommit, branches, records, baseMessage = BASE_MESSAGE }) {
   const findings = [];
   const fail = (branch, reason) => findings.push({ branch, reason });
   const byId = new Map(records.map((r) => [r.id, r]));
@@ -795,7 +796,7 @@ export function verifyBranchRepo(gitDir, { baseCommit, branches, records }) {
       fail(short, "is a ref a reviewer would see, and is neither the base nor pr/NNN");
     }
   }
-  if (git(gitDir, ["log", "-1", "--format=%B", baseCommit]).replace(/\n+$/, "\n") !== BASE_MESSAGE) {
+  if (git(gitDir, ["log", "-1", "--format=%B", baseCommit]).replace(/\n+$/, "\n") !== baseMessage) {
     fail(BASE_BRANCH, "the base commit carries a message other than the pinned one");
   }
 

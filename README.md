@@ -30,6 +30,7 @@ JUICE_SHOP_DIR=/tmp/juice-shop npm test
 | `bin/build-base.mjs <checkout> <outdir> [manifest]` | composes all 35 correct variants into the repaired base tree |
 | `bin/parse-check.mjs <tree>` | gates a tree on semgrep 1.99.0 parsing every scored file |
 | `bin/generate-branches.mjs <checkout> <outrepo> [manifest]` | writes the 179 pull-request branches into a bare git repository |
+| `bin/extend-declared.mjs <repo.git> <declared.mjs> --first N` | adds declared items: one new `main` commit and two branches per item |
 
 ## The branch repository
 
@@ -79,6 +80,27 @@ branches, all of them `frontend/src/app/app.routing.ts`, git anchors its hunk on
 earlier than `src/base-tree.mjs`'s `lineHunks` does. Both alignments are minimal and the file
 repeats the line, so there is more than one minimal alignment. Asserting the sequence would be
 asserting which Myers implementation ran.
+
+## Declared items
+
+Some defects are real but upstream never marked them, so nothing here can derive their site or
+their fix. They are **declared** instead, in the private answer-key repository, because a declared
+site and fix say which unmarked lines the benchmark scores. `bin/extend-declared.mjs` takes that
+file by path and never copies it; it refuses a path inside this repository. `leak-hashes.json`
+carries the fixes' lines, so a fixture here cannot contain one.
+
+It extends a repository `bin/generate-branches.mjs` already wrote, **in place, without rewriting
+anything**, because those refs may already be published and read back. `main` gains one commit on
+top of the commit the declarations name, applying every declared fix, and fast-forwards. Every
+existing branch keeps its SHA; for those branches the declared sites are code their base still
+carries. Each item then gets an introduce-the-vuln branch from the new `main`, carrying every
+other item's fix but not its own, and a correct-fix branch cut from that head. There is no
+broken-fix class, because upstream wrote no broken variants for these. The new branches are
+numbered on from `--first` in the same digest order, verified at the git level like the rest,
+and recorded in a second private manifest beside the repository.
+
+A declared fix is exact text to replace, with a count, not a line number: a line number that is
+off by one still applies, to the wrong line. Run it on a copy of the published repository.
 
 ## The six things worth knowing before reading the code
 

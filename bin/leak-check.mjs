@@ -15,7 +15,9 @@ import { checkForLeaks } from "../src/leak-check.mjs";
 const args = process.argv.slice(2);
 const hashArg = args.indexOf("--hashes");
 const hashPath = hashArg >= 0 ? args[hashArg + 1] : "leak-hashes.json";
-const roots = args.filter((a, i) => !a.startsWith("--") && i !== hashArg + 1);
+// Only the argument after `--hashes` is its value. Without `--hashes`, `hashArg + 1` is 0 and the
+// first path would be dropped — and the check would run over the defaults and report them clean.
+const roots = args.filter((a, i) => !a.startsWith("--") && (hashArg < 0 || i !== hashArg + 1));
 
 if (!fs.existsSync(hashPath)) {
   console.error(`leak-check: no hash list at ${hashPath}.`);
