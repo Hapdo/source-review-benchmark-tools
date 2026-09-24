@@ -37,6 +37,14 @@
  * snippet-preserving, it makes the bracket rule total, and the repaired tree is a generated
  * artifact where uniformity is worth more than resemblance to upstream's formatting.
  *
+ * The marker comment is kept whole, to the end of its line, and nothing after it is re-emitted.
+ * When the block is addressed by a key that is not the last one a multi-key `end` marker names,
+ * the boundary match stops short of the line's end and the rest comes back as `endMarkerRest`.
+ * That text is the other keys, not code, and it is already in the comment. Until HD-81 it was
+ * called `suffix` and written out a second time as a line of its own, in 45 of the corpus's 121
+ * variant splices, and the round trip could not see it — which is why {@link assertConfined}
+ * exists.
+ *
  * **Hidden lines anchored to a replaced line follow the replacement, not the deletion.** `diffLines`
  * emits `removed` before `added`, so flushing hidden lines as soon as their anchor is passed puts
  * a 32-line `hide` region *above* the code that replaced the line it hung from. Pending hidden
@@ -81,8 +89,18 @@ export function spliceVariant(source, challengeKey, variantText) {
     throw new SpliceRefused(`${challengeKey}: no end marker on line ${snip.spanEnd}`);
   }
   // Split the closing line into the code that precedes the marker and the marker comment itself.
+  // The comment runs to the end of the line, so it carries every key the marker names — including
+  // any the boundary match stopped short of, which is all `snip.endMarkerRest` is. Nothing on this
+  // line after the marker is code, so nothing else is re-emitted.
   const closeCode = closeRaw.slice(0, closeMarker.index).replace(/\s+$/, "");
   const closeComment = indentOf(closeRaw) + closeRaw.slice(closeMarker.index);
+  if (!closeComment.endsWith(snip.endMarkerRest)) {
+    throw new SpliceRefused(
+      `${challengeKey}: the end marker on line ${snip.spanEnd} does not carry what follows the ` +
+        `boundary key (${JSON.stringify(snip.endMarkerRest)}). The line holds a second marker, and ` +
+        `this module will not guess which one closes the block.`,
+    );
+  }
 
   // Hidden lines anchor to the last snippet line above them. The two bracket lines are excluded:
   // they are emitted first and last unconditionally.
@@ -146,7 +164,6 @@ export function spliceVariant(source, challengeKey, variantText) {
   const head = fileLines.slice(0, snip.spanStart - 1);
   const tail = fileLines.slice(snip.spanEnd);
   const body = [openLine, ...unshadowBlankLines(out), closeComment];
-  if (snip.suffix.trim() !== "") body.push(snip.suffix);
   return { source: [...head, ...body, ...tail].join(eol), stats };
 }
 
@@ -236,7 +253,56 @@ export function spliceVariantChecked(source, challengeKey, variantText) {
         `variant back. The alignment is wrong.`,
     );
   }
+  assertConfined(source, result.source, challengeKey);
   return result;
+}
+
+/**
+ * Prove a splice changed nothing outside the block it was aimed at.
+ *
+ * The round trip above re-displays the block, and the display ends where the boundary match ends
+ * — on the key it was given. Anything a splice writes past that point is invisible to it. That is
+ * not hypothetical: until HD-81 the splicer wrote the rest of a multi-key `end` marker's key list
+ * as a bare line after the marker, in 8 of the corpus's 23 blocks, and every one of those splices
+ * passed the round trip. So the round trip is half a proof, and this is the other half: every line
+ * above the block, the `start` marker line itself, and every line after the `end` marker are
+ * byte-identical to the source's, and the `end` marker names the same keys it did.
+ *
+ * Exported so a caller that splices by some other route can hold itself to the same standard.
+ *
+ * @param {string} before whole file contents the splice started from
+ * @param {string} after whole file contents the splice produced
+ * @param {string} challengeKey the key the splice addressed
+ */
+export function assertConfined(before, after, challengeKey) {
+  const was = extractSnippet(before, challengeKey);
+  const is = extractSnippet(after, challengeKey);
+  const a = splitLines(before).lines;
+  const b = splitLines(after).lines;
+  const refuse = (what) => {
+    throw new SpliceRefused(`${challengeKey}: the splice ${what}. A splice may only rewrite its own block.`);
+  };
+  if (is.spanStart !== was.spanStart) refuse(`moved the block's start marker from line ${was.spanStart} to ${is.spanStart}`);
+  for (let i = 0; i < was.spanStart - 1; i++) {
+    if (a[i] !== b[i]) refuse(`changed line ${i + 1}, above the block`);
+  }
+  if (a[was.spanStart - 1] !== b[is.spanStart - 1]) refuse(`changed the block's start marker line`);
+  const tailA = a.slice(was.spanEnd);
+  const tailB = b.slice(is.spanEnd);
+  if (tailA.length !== tailB.length) {
+    refuse(
+      `left ${tailB.length - tailA.length} extra line(s) after the block's end marker ` +
+        `(first: ${JSON.stringify(tailB[0] ?? "")})`,
+    );
+  }
+  for (let i = 0; i < tailA.length; i++) {
+    if (tailA[i] !== tailB[i]) refuse(`changed line ${was.spanEnd + 1 + i} of the source, below the block`);
+  }
+  const endWas = parseMarker(a[was.spanEnd - 1]);
+  const endIs = parseMarker(b[is.spanEnd - 1]);
+  if (endIs?.type !== "end" || endIs.keys.join(" ") !== endWas.keys.join(" ")) {
+    refuse(`changed the end marker from ${JSON.stringify(endWas.keys)} to ${JSON.stringify(endIs?.keys ?? null)}`);
+  }
 }
 
 /**
@@ -300,5 +366,6 @@ export function spliceNestedBlock(source, outerKey, innerKey, variantText) {
   if (filterString(round).trim() !== filterString(variantText).trim()) {
     throw new SpliceRefused(`${outerKey}: round trip failed after re-attaching ${innerKey}`);
   }
+  assertConfined(source, restored, outerKey);
   return { source: restored, stats: spliced.stats };
 }

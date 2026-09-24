@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { extractSnippet, parseMarker, splitLines } from "../src/markers.mjs";
 import { filterString } from "../src/rsn.mjs";
+import { spliceVariantChecked } from "../src/splice.mjs";
 import { stripMarkers, stripTree, verifyStripped } from "../src/strip.mjs";
 import { availableRunner, checkTree, selectTargets } from "../src/parse-check.mjs";
 import {
@@ -237,16 +238,35 @@ describe.skipIf(!haveCorpus)(`the branch plan, against the pinned corpus (${skip
     expect(codefix("chatbotGreedyInjectionChallenge_2_correct.ts")).toContain(EXCLUSION_EVIDENCE.exportedSymbol);
   });
 
-  it("finds B13's own key first on its end marker, which is why no anchor can splice it", () => {
-    // Reason 1 for the exclusion, and the reason B13's two branches are hand-built: phase 4's
-    // anchor workaround needs the block's key to be *last* on the end marker, and B13's is first.
-    const lines = splitLines(read("routes/chat.ts")).lines;
+  it("HD-81: splices B13 on its own key, though that key is first on an end marker it shares with B14", () => {
+    // Phase 6 recorded this as the reason no anchor could splice B13: the splicer wrote the rest of
+    // the end marker's key list back as a bare ` chatbotPromptInjectionChallenge` line. The marker
+    // is unchanged; the splicer no longer does that.
+    const source = read("routes/chat.ts");
+    const lines = splitLines(source).lines;
     const step = planSteps(upstream, codefixes).find((s) => s.id === "routes/chat.ts:81");
     const marker = parseMarker(lines[step.end - 1]);
-    expect(marker.type).toBe("end");
     expect(marker.keys).toEqual(["chatbotGreedyInjectionChallenge", "chatbotPromptInjectionChallenge"]);
-    expect(marker.keys[marker.keys.length - 1]).not.toBe(step.keys[0]);
-    expect(extractSnippet(read("routes/chat.ts"), "chatbotGreedyInjectionChallenge").suffix.trim()).not.toBe("");
+    expect(step.anchor).toBe("chatbotGreedyInjectionChallenge");
+    const snippet = extractSnippet(source, step.anchor).snippet;
+    const { source: out } = spliceVariantChecked(source, step.anchor, snippet.replace(UNFIXED, FIXED));
+    expect(splitLines(out).lines.some((l) => l.trim() === "chatbotPromptInjectionChallenge")).toBe(false);
+    expect(out).toContain(FIXED);
+  });
+
+  it("HD-81: B13's two hand-built branches are exactly what the splicer makes from the one-line fix", () => {
+    // Generated rather than asserted: splice the substitution into B13's displayed snippet on the
+    // base tree and on the head, and demand the hand-built bytes back.
+    const [site] = plan.items.find((i) => i.id === HAND_BUILT_ITEMS[0].block).sites;
+    const head = plan.branches.find((b) => b.class === "introduce-the-vuln" && b.item === site.block);
+    const fix = plan.branches.find((b) => b.variant === "chatbotGreedyInjectionChallenge_2_correct.ts");
+    const base = built.tree.get(site.file);
+    const baseSnippet = extractSnippet(base, site.anchor).snippet;
+    const generatedHead = spliceVariantChecked(base, site.anchor, baseSnippet.replace(FIXED, UNFIXED)).source;
+    expect(generatedHead).toBe(head.files[0].spliced);
+    const headSnippet = extractSnippet(generatedHead, site.anchor).snippet;
+    const generatedFix = spliceVariantChecked(generatedHead, site.anchor, headSnippet.replace(UNFIXED, FIXED)).source;
+    expect(generatedFix).toBe(fix.files[0].spliced);
   });
 
   it("builds B13's two branches by hand and proves the revert is the repair's inverse", () => {
@@ -257,8 +277,7 @@ describe.skipIf(!haveCorpus)(`the branch plan, against the pinned corpus (${skip
     expect(head.builtBy).toBe("src/b13-hand-repair.mjs#applyB13Correct");
     expect(head.files[0].spliced).toContain(UNFIXED);
     expect(head.files[0].spliced).not.toContain(FIXED);
-    // The correct fix returns the base tree's file byte for byte — the round trip the splicer
-    // would have given, obtained from the hand repair instead.
+    // The correct fix returns the base tree's file byte for byte.
     expect(fix.files[0].spliced).toBe(built.tree.get("routes/chat.ts"));
     expect(fix.files[0].spliced).toContain(FIXED);
     expect(plan.branches.filter((b) => b.item === item.id)).toHaveLength(2);

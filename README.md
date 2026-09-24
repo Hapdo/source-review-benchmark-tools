@@ -127,19 +127,24 @@ work — it is the oracle the mapped extractor is tested against, on all 36 (key
 are reproduced from locally computed snippets. Together those prove the snippet extraction *and*
 the diff alignment match upstream's, neither of which the corpus alone can confirm.
 
-**5. Every splice is proved by round trip.** Splice a variant in, re-display the block, and demand
-the variant back. Nothing weaker separates a correct splice from one that is two lines off, because
-both produce a file that parses — and a tree that parses wrongly is scored rather than reported.
+**5. Every splice is proved twice: by round trip, and by confinement.** Splice a variant in,
+re-display the block, and demand the variant back. Nothing weaker separates a correct splice from
+one that is two lines off, because both produce a file that parses — and a tree that parses wrongly
+is scored rather than reported. The round trip alone is not enough, though, because the display
+ends where the boundary match ends, and anything written past it is invisible. So
+`spliceVariantChecked` also demands every line above the block, the `start` marker line, and every
+line after the `end` marker back byte for byte, and the `end` marker's key list unchanged.
 
-**6. `spliceVariant` leaves a stray line behind on a multi-key `end` marker.** `extractSnippet`'s
-boundary match stops at the key it was given, part-way along an `end` marker naming several; the
-rest returns as `suffix`, which the splicer emits as its own line. Splicing `app.routing.ts` on
-`adminSectionChallenge` appends a bare ` scoreBoardChallenge web3SandboxChallenge` — two juxtaposed
-identifiers, in a file that then would not parse. **8 of 23 blocks** are affected, and the round
-trip cannot see it: re-extracting on the same key stops at the same point, past which the stray line
-sits. `src/base-tree.mjs` works around it by anchoring every splice on the *last* key its `end`
-marker names, asserted as a property over all 23 blocks. The real fix is for the splicer to tell a
-`start` marker's live-code suffix from an `end` marker's leftover keys.
+**6. What follows the key on an `end` marker is marker text, never code.** Upstream's boundary
+match stops at the key it was given, part-way along an `end` marker naming several, and upstream's
+`end.*` runs to the end of the line. `extractSnippet` returns the rest as `endMarkerRest`, beside
+the `start` marker's `prefix`, which *is* live code. Until HD-81 the two were `prefix` and `suffix`
+and the splicer re-emitted `suffix` as a line of its own: splicing `app.routing.ts` on
+`adminSectionChallenge` appended a bare ` scoreBoardChallenge web3SandboxChallenge`, in 45 of the
+121 variant splices, and every one passed the round trip. Phase 4 worked around it by anchoring on
+the last key; B13, whose own key is first on the `end` marker it shares with B14, had no such key.
+The splicer now keeps that text in the marker comment, the confinement check above would have
+refused all 45, and every block is addressed by the first key its `start` marker names.
 
 ## What the tools refuse to do
 
@@ -160,6 +165,11 @@ marks the same `discount:` line `vuln-line` for both keys, so the other order ov
 nothing errors. The repair refuses unless it finds B14 already applied, and refuses a second
 application rather than no-opping: it is the one step with no round trip behind it, so a
 double-apply has to be visible.
+
+B13's two pull-request branches are that one-line fix and its inverse. Each is made twice — by hand
+over the file, and by the splicer over B13's displayed snippet on B13's own key — and refused unless
+the two agree byte for byte, so the branches carry the splicer's round trip even though the base
+tree's repair does not.
 
 **The base tree parses and does not typecheck, on purpose.** Upstream's correct variants call
 functions nobody has written — `validatePasswordHasAtLeastTenChar`, `security.isAdmin`,

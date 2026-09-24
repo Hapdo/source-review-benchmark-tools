@@ -9,7 +9,7 @@ import {
   CompositionRefused,
   HAND_REPAIRED_KEYS,
   OVERLAP_EFFECTS,
-  anchorKeyFor,
+  addressKeyFor,
   buildBaseTree,
   composeSnippet,
   lineHunks,
@@ -134,25 +134,34 @@ describe("composeSnippet", () => {
   });
 });
 
-describe("anchorKeyFor", () => {
-  it("picks the last key the end marker names, which is the one that leaves no suffix", () => {
-    // The separation, not the name: extracting on any earlier key leaves the remaining key list as
-    // `suffix`, and `spliceVariant` writes a non-blank suffix out as a line of its own.
+describe("addressKeyFor", () => {
+  it("HD-81: addresses a block by the first key its start marker names", () => {
     const block = findBlocks(TWO_KEYS)[0];
-    expect(anchorKeyFor(TWO_KEYS, block)).toBe("betaChallenge");
-    expect(extractSnippet(TWO_KEYS, "betaChallenge").suffix.trim()).toBe("");
-    expect(extractSnippet(TWO_KEYS, "alphaChallenge").suffix.trim()).toBe("betaChallenge");
+    expect(addressKeyFor(TWO_KEYS, block)).toBe("alphaChallenge");
   });
 
-  it("is what keeps a bare line of key names out of the spliced file", () => {
-    const snippet = snippetOf(TWO_KEYS, "betaChallenge");
-    const fixed = snippet.replace("const b = 2", "const b = FIXED");
-    const onFirst = spliceVariantChecked(TWO_KEYS, "alphaChallenge", snippetOf(TWO_KEYS, "alphaChallenge").replace("const b = 2", "const b = FIXED"));
-    const onLast = spliceVariantChecked(TWO_KEYS, "betaChallenge", fixed);
-    // Splicing on the first key writes the rest of the end marker's key list out as a line of
-    // code. In `app.routing.ts` that line is two juxtaposed identifiers and the file stops parsing.
-    expect(splitLines(onFirst.source).lines).toContain(" betaChallenge");
-    expect(splitLines(onLast.source).lines.some((l) => l.trim() === "betaChallenge")).toBe(false);
+  it("HD-81: splices a multi-key block to the same bytes whichever key addresses it", () => {
+    // Phase 4 anchored on the last key because any other one left a bare line of key names after
+    // the end marker. With the splicer fixed, the key is a name for the block and nothing more.
+    const variant = (key) => snippetOf(TWO_KEYS, key).replace("const b = 2", "const b = FIXED");
+    const onFirst = spliceVariantChecked(TWO_KEYS, "alphaChallenge", variant("alphaChallenge"));
+    const onLast = spliceVariantChecked(TWO_KEYS, "betaChallenge", variant("betaChallenge"));
+    expect(onFirst.source).toBe(onLast.source);
+    expect(splitLines(onFirst.source).lines.some((l) => l.trim() === "betaChallenge")).toBe(false);
+  });
+
+  it("refuses a key whose boundary match lands on a different block", () => {
+    // Upstream matches a key as a substring of the first start marker containing it.
+    const source = [
+      `// ${T} start fooBarChallenge`,
+      "  const a = 1",
+      `// ${T} end fooBarChallenge`,
+      `// ${T} start barChallenge`,
+      "  const b = 1",
+      `// ${T} end barChallenge fooBarChallenge`,
+    ].join("\n");
+    const block = { start: 4, end: 6, keys: ["Bar"] };
+    expect(() => addressKeyFor(source, block)).toThrow(BaseTreeRefused);
   });
 });
 
@@ -423,23 +432,23 @@ describe.skipIf(!haveCorpus)(`conformance with the corpus (${skipReason})`, () =
     expect(JSON.stringify(built.manifest)).not.toContain(corpusDir);
   });
 
-  it("finds every multi-key end marker, so the anchor rule is not a special case for one block", () => {
-    // Eight blocks, in four languages. Splicing any of them on its first key writes a bare line of
-    // key names into the file; in `app.routing.ts` that line is two juxtaposed identifiers.
+  it("HD-81: addresses every block by its own first key, including the eight whose end marker names several", () => {
+    // Eight blocks carry an end marker naming more than one of their own keys. Phase 4 anchored
+    // each on the last of them, because any other key left the rest of the list behind as a bare
+    // line after the marker. That workaround is gone: every block is addressed by its first key,
+    // and the build above spliced all of them and passed the splicer's confinement check.
     const multi = [];
     for (const step of planSteps(tree, codefixes)) {
       const lines = splitLines(tree.get(step.file)).lines;
       const endKeys = parseMarker(lines[step.end - 1]).keys.filter((k) => step.keys.includes(k));
       if (endKeys.length > 1) multi.push(step.id);
-      expect(step.anchor).toBe(endKeys[endKeys.length - 1]);
-      // B13's end marker names a key that is not its own — it closes B14 too — so no anchor of
-      // B13's leaves an empty suffix. It is also the one block that is never spliced. That the
-      // exception to the anchor rule and the exception to splicing are the same block is the
-      // reason the rule is total for everything this module does splice.
-      const suffix = extractSnippet(tree.get(step.file), step.anchor).suffix.trim();
-      if (step.mode === "splice") expect(suffix).toBe("");
-      else expect(suffix).not.toBe("");
+      expect(step.anchor).toBe(step.keys[0]);
     }
     expect(multi.length).toBe(8);
+    const journal = new Map(built.steps.map((s) => [s.id, s]));
+    for (const id of multi) {
+      expect(journal.get(id).mode).toBe("splice");
+      expect(journal.get(id).anchor).not.toBe(journal.get(id).keys.at(-1));
+    }
   });
 });
