@@ -311,8 +311,16 @@ class TracedText {
  * - `hidden` — every file line in the block the snippet does not show, with the reason it is
  *   hidden. These are preserved verbatim by the splicer.
  * - `spanStart`/`spanEnd` — the file lines the splice may rewrite, being the marker lines' own
- *   span. Code *before* a `start` suffix marker and *after* an `end` suffix marker is outside the
- *   snippet and must survive; `prefix`/`suffix` carry it.
+ *   span.
+ * - `prefix` — live code on the `start` marker's line, before the marker. It is outside the
+ *   snippet and must survive a splice.
+ * - `endMarkerRest` — what follows the boundary key on the `end` marker's line. It is **never
+ *   code**: upstream's `end.*` runs to the end of the line, so this is the rest of the marker
+ *   comment — the other keys a multi-key `end` marker names, or nothing. It belongs to the
+ *   marker, and a splice that keeps the marker keeps it. It used to be called `suffix`, sat
+ *   beside `prefix` as if the two were the same kind of thing, and the splicer re-emitted it as a
+ *   line of its own: a bare line of key names in every block whose `end` marker names several
+ *   keys and was addressed by any key but the last (HD-81).
  *
  * @param {string} source whole file contents
  * @param {string} challengeKey
@@ -363,8 +371,8 @@ export function extractSnippet(source, challengeKey) {
     spanEnd,
     /** Code on the `start` marker's line that sits before the marker, and is not in the snippet. */
     prefix: source.slice(lineStarts[spanStart - 1], from),
-    /** Code on the `end` marker's line that sits after the marker, and is not in the snippet. */
-    suffix: source.slice(to, lineStarts[spanEnd] == null ? source.length : lineStarts[spanEnd] - 1),
+    /** The rest of the `end` marker comment after the boundary key. Marker text, never code. */
+    endMarkerRest: source.slice(to, lineStarts[spanEnd] == null ? source.length : lineStarts[spanEnd] - 1),
     /** Indentation `trim()` took off the snippet's first line, and whitespace off its last. */
     leadWs: trimmed.leadWs,
     tailWs: trimmed.tailWs,

@@ -132,22 +132,27 @@ export const MIRRORED_ITEMS = Object.freeze([
 ]);
 
 /**
- * The block whose branches are built by hand, and the two operations that build them.
+ * The block whose branches are built from one line, and the two operations that build them.
  *
- * `chatbotGreedyInjectionChallenge` — B13, `routes/chat.ts` 81–188 — cannot be spliced at all, for
- * a reason that has nothing to do with its variants: its `end` marker on line 188 reads
- * `end chatbotGreedyInjectionChallenge chatbotPromptInjectionChallenge`, and B13's only key is the
- * **first** name on it. `anchorKeyFor`'s workaround — anchor on the last key the `end` marker
- * names — is unavailable, because that key belongs to B14. Splicing B13 on its own key therefore
- * writes a bare ` chatbotPromptInjectionChallenge` line into `routes/chat.ts`, which does not
- * parse, and the splicer's round trip cannot see it. B13 is the one block in the corpus for which
- * the phase-4 workaround does not exist.
+ * `chatbotGreedyInjectionChallenge` — B13, `routes/chat.ts` 81–188 — has no variant that is an edit
+ * of its displayed snippet: all four drop the `export function chat () {` wrapper and dedent by
+ * four, so none of them can be spliced as written (see {@link EXCLUDED_VARIANTS}). What B13's fix
+ * *is* was measured in phase 4 and is one literal substring on one line: `z.number()` becomes
+ * `z.number().max(10)`. So its two branches are that substitution and its inverse.
  *
- * What B13's fix *is* was measured in phase 4 and is one literal substring on one line:
- * `z.number()` becomes `z.number().max(10)`. So its two branches are that substitution and its
- * inverse, and both are proved against `applyB13Correct` rather than merely performed:
- * introducing the vulnerability is refused unless re-applying the hand repair to the result
- * returns the base tree's `routes/chat.ts` byte for byte.
+ * Each one is made twice, and the two must agree byte for byte. Once by hand, as a substitution
+ * over the file, proved against `applyB13Correct`: introducing the vulnerability is refused unless
+ * re-applying the hand repair returns the base tree's `routes/chat.ts`. And once by the splicer,
+ * as the same substitution over the block's *displayed snippet*, spliced back on B13's own key and
+ * held to `spliceVariantChecked`'s round trip and confinement check.
+ *
+ * Until HD-81 the second derivation did not exist. B13's `end` marker on line 188 reads
+ * `end chatbotGreedyInjectionChallenge chatbotPromptInjectionChallenge`, B13's key is the first
+ * name on it, and the splicer wrote the rest of that list back as a bare
+ * ` chatbotPromptInjectionChallenge` line after the marker. Phase 4's workaround — anchor on the
+ * last key — was unavailable, because that key is B14's. The splicer now keeps that text inside
+ * the marker, so B13 splices like every other block and these are no longer the one step in the
+ * corpus with no round trip behind it.
  */
 export const HAND_BUILT_ITEMS = Object.freeze([
   Object.freeze({
@@ -157,8 +162,8 @@ export const HAND_BUILT_ITEMS = Object.freeze([
     introduce: Object.freeze({ find: FIXED, replace: UNFIXED }),
     repair: "src/b13-hand-repair.mjs#applyB13Correct",
     reason:
-      "B13's end marker names its own key first, so no anchor leaves an empty suffix and every " +
-      "splice of it emits a bare line of key names; its fix is one literal substring",
+      "no variant of B13 is an edit of its displayed snippet; its fix is one literal substring, " +
+      "applied by hand and by the splicer, and the two must agree byte for byte",
   }),
 ]);
 
@@ -169,10 +174,10 @@ export const HAND_BUILT_ITEMS = Object.freeze([
  * preference; three independent things have to be decided to include them, and two of the three
  * would put a build break into a branch that is scored for security findings:
  *
- * 1. **The block cannot be spliced.** See {@link HAND_BUILT_ITEMS}: B13's `end` marker names its
- *    own key first, so the stray-line bug fires and phase 4's anchor workaround does not exist for
- *    it. `spliceNestedBlock` does not help — it calls `spliceVariant`, which is where the stray
- *    line is emitted.
+ * 1. *(Retired by HD-81.)* Phase 6 recorded a first reason: B13's `end` marker names its own key
+ *    first, so the splicer's stray-line defect fired on it and no anchor avoided it. The splicer
+ *    is fixed and B13's block now splices; the two reasons below are why these three are still
+ *    excluded, and either is sufficient.
  * 2. **They are not edits of their block's snippet.** They drop the `export function chat () {`
  *    wrapper and its `return async (req, res) => {`, and dedent the tool object by four. Splicing
  *    one deletes a live function declaration.
@@ -195,17 +200,17 @@ export const EXCLUDED_VARIANTS = Object.freeze([
   Object.freeze({
     variant: "chatbotGreedyInjectionChallenge_1.ts",
     class: "broken-fix",
-    signals: Object.freeze(["block-unspliceable", "not-an-edit-of-its-snippet", "drops-export", "drops-parameter"]),
+    signals: Object.freeze(["not-an-edit-of-its-snippet", "drops-export", "drops-parameter"]),
   }),
   Object.freeze({
     variant: "chatbotGreedyInjectionChallenge_3.ts",
     class: "broken-fix",
-    signals: Object.freeze(["block-unspliceable", "not-an-edit-of-its-snippet", "drops-export"]),
+    signals: Object.freeze(["not-an-edit-of-its-snippet", "drops-export"]),
   }),
   Object.freeze({
     variant: "chatbotGreedyInjectionChallenge_4.ts",
     class: "broken-fix",
-    signals: Object.freeze(["block-unspliceable", "not-an-edit-of-its-snippet", "drops-export"]),
+    signals: Object.freeze(["not-an-edit-of-its-snippet", "drops-export"]),
   }),
 ]);
 
@@ -525,6 +530,7 @@ function handBuiltVulnFiles(base, item) {
     );
   }
   const after = before.split(declared.introduce.find).join(declared.introduce.replace);
+  assertSpliceAgrees(item, before, after, declared.introduce.find, declared.introduce.replace, "introduce-the-vuln");
   const back = applyB13Correct(after);
   if (back.source !== before) {
     throw new BranchRefused(
@@ -559,7 +565,35 @@ function handBuiltFixFiles(head, item, variantName) {
   const before = head.get(declared.file);
   const { source } = applyB13Correct(before);
   if (source === before) throw new BranchRefused(`${item.id}: ${variantName} by hand produced no change`);
+  assertSpliceAgrees(item, before, source, declared.introduce.replace, declared.introduce.find, variantName);
   return new Map([[declared.file, source]]);
+}
+
+/**
+ * Make a hand-built branch a second time, by the splicer, and refuse unless the two agree.
+ *
+ * The same one-line substitution is applied to the block's **displayed snippet** instead of to the
+ * file, and spliced back on the block's own key, so the result carries `spliceVariantChecked`'s
+ * round trip and its proof that nothing outside the block moved. A hand edit and a splice that
+ * reach the same bytes by different routes are each other's check.
+ */
+function assertSpliceAgrees(item, before, byHand, find, replace, what) {
+  const [site] = item.sites;
+  const snippet = extractSnippet(before, site.anchor).snippet;
+  const occurrences = snippet.split(find).length - 1;
+  if (occurrences !== 1) {
+    throw new BranchRefused(
+      `${item.id}: the displayed snippet carries ${JSON.stringify(find)} ${occurrences} times, not ` +
+        `once, so the splicer cannot make ${what} from it.`,
+    );
+  }
+  const bySplice = spliceInto(before, site, snippet.split(find).join(replace), `${what} by the splicer`);
+  if (bySplice !== byHand) {
+    throw new BranchRefused(
+      `${item.id}: ${what} by hand and by the splicer disagree on ${site.file}. One of the two ` +
+        `routes is wrong, and the branch is not built until they agree.`,
+    );
+  }
 }
 
 /**

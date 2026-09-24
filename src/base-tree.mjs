@@ -37,26 +37,21 @@
  * the twenty-three blocks satisfy that assertion; the twenty-third is B13, below, which requires
  * the opposite and says so.
  *
- * ## Which key a block is spliced on, and why it is not the first one
+ * ## Which key a block is spliced on
  *
  * A block is addressed by any one of its keys, and the snippet is the same whichever is used —
- * upstream's four stripping regexes name no key. The *boundary* match does: it ends at the key it
- * was given, part-way along an `end` marker that names several. `extractSnippet` hands whatever
- * follows back as `suffix`, and `spliceVariant` re-emits a non-blank `suffix` as a line of its own,
- * because for a `start` suffix marker that text really is live code.
+ * upstream's four stripping regexes name no key. Each block is addressed by the **first key its
+ * `start` marker names** ({@link addressKeyFor}), because that is the one that names the block
+ * rather than some other block sharing its `end` marker.
  *
- * For an `end` marker it never is. It is the rest of the key list. Splicing B05 on
- * `adminSectionChallenge` appends ` scoreBoardChallenge web3SandboxChallenge` to
- * `app.routing.ts` as a bare line — two juxtaposed identifiers, which does not parse — and the
- * splicer's own round trip cannot see it, because re-extracting on the same key stops at the same
- * point and the stray line is past it. Every one of the eight blocks whose `end` marker names more
- * than one key does this, in eight languages' worth of files.
- *
- * So each block is spliced on the **last key its `end` marker names**, which puts the boundary at
- * the end of the line and leaves `suffix` empty. That is a workaround and it is recorded as one:
- * the defect is in `src/splice.mjs`'s `suffix` handling, which should distinguish a `start`
- * marker's live-code suffix from an `end` marker's leftover key names. Phase 4 does not own that
- * file; see the phase note.
+ * Until HD-81 it was the *last* key its `end` marker named. The boundary match ends at the key it
+ * is given, part-way along an `end` marker that names several, and the splicer used to re-emit the
+ * rest of that key list as a bare line after the marker — ` scoreBoardChallenge
+ * web3SandboxChallenge` in `app.routing.ts`, which does not parse. Anchoring on the last key was
+ * the workaround. It had no answer for B13, whose own key is *first* on an `end` marker it shares
+ * with B14. The splicer now keeps that text inside the marker comment it belongs to, and
+ * `spliceVariantChecked` proves every line outside the block unchanged, so any key is safe and the
+ * workaround is gone.
  *
  * ## The three things the corpus makes irreducibly specific
  *
@@ -349,24 +344,24 @@ const REINTRODUCED_TYPO = "Number(Id)";
 /* -------------------------------------------------------------------------- */
 
 /**
- * The key a block is addressed by: the last one its `end` marker names.
+ * The key a block is addressed by: the first one its `start` marker names.
  *
- * See the note at the head of this file. Any key of the block yields the same snippet; only this
- * one yields an empty `suffix`, and a non-empty `suffix` on an `end` marker becomes a bare line of
- * key names in the spliced file.
+ * Any key of the block yields the same snippet and, since HD-81, the same splice. What this
+ * guards is the other direction: upstream's boundary regex matches a key as a substring of the
+ * first `start` marker that contains it, so the key is refused unless the block it finds is this
+ * one.
  */
-export function anchorKeyFor(source, block) {
-  const { lines } = splitLines(source);
+export function addressKeyFor(source, block) {
   if (block.end <= 0) throw new BaseTreeRefused(`block at line ${block.start} has no end marker`);
-  const marker = parseMarker(lines[block.end - 1]);
-  if (marker?.type !== "end") {
-    throw new BaseTreeRefused(`line ${block.end} does not carry the end marker it was paired on`);
+  const key = block.keys[0];
+  const found = extractSnippet(source, key);
+  if (found.spanStart !== block.start || found.spanEnd !== block.end) {
+    throw new BaseTreeRefused(
+      `${key} addresses lines ${found.spanStart}–${found.spanEnd}, not the block at ` +
+        `${block.start}–${block.end} whose start marker names it`,
+    );
   }
-  const mine = marker.keys.filter((k) => block.keys.includes(k));
-  if (mine.length === 0) {
-    throw new BaseTreeRefused(`the end marker on line ${block.end} names none of ${block.keys.join(", ")}`);
-  }
-  return mine[mine.length - 1];
+  return key;
 }
 
 /**
@@ -592,7 +587,7 @@ export function planSteps(tree, codefixes) {
         start: block.start,
         end: block.end,
         keys: [...block.keys],
-        anchor: anchorKeyFor(source, block),
+        anchor: addressKeyFor(source, block),
         variants,
         mode: block.keys.some((k) => HAND_REPAIRED_KEYS.includes(k)) ? "hand-repair" : "splice",
       });
